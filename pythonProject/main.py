@@ -23,6 +23,28 @@ print(f"Train samples: {len(train_df)}")
 print(f"Test samples: {len(test_df)}")
 print(f"Validation samples: {len(valid_df)}")
 
+class CustomCNN(nn.Module):
+    def __init__(self, num_classes):
+        super(CustomCNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)  # 224x224
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+
+        # Rozmiar po 3 poolingach: 224 → 112 → 56 → 28
+        self.fc1 = nn.Linear(128 * 28 * 28, 128)
+        self.dropout = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.pool(torch.relu(self.conv1(x)))
+        x = self.pool(torch.relu(self.conv2(x)))
+        x = self.pool(torch.relu(self.conv3(x)))
+        x = x.view(x.size(0), -1)  # flatten
+        x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
 
 def save_images(images, labels, folder="saved_images", prefix=""):
     os.makedirs(folder, exist_ok=True)
@@ -81,8 +103,9 @@ class CardDataset(Dataset):
 
 train_transforms = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.RandomHorizontalFlip(),
+    # transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
@@ -154,8 +177,9 @@ plt.show()
 
 num_classes = df['class'].nunique()
 
-model = resnet18(weights=None)
-model.fc = nn.Linear(model.fc.in_features, num_classes)
+# model = resnet18(weights=None)
+# model.fc = nn.Linear(model.fc.in_features, num_classes)
+model = CustomCNN(num_classes)
 model = model.to(device)
 
 def accuracy(outputs, labels):
@@ -175,7 +199,7 @@ def evaluate(model, val_loader):
             acc_total += acc.item()
     return loss_total / len(val_loader), acc_total / len(val_loader)
 
-def train_model(model, train_loader, val_loader, epochs=10, lr=0.001):
+def train_model(model, train_loader, val_loader, epochs=15, lr=0.001):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     best_acc = 0.0
@@ -207,7 +231,7 @@ def train_model(model, train_loader, val_loader, epochs=10, lr=0.001):
             torch.save(model.state_dict(), 'best_model.pth')
             print("💾 Zapisano najlepszy model!")
 
-train_model(model, train_loader, valid_loader, epochs=10, lr=0.001)
+train_model(model, train_loader, valid_loader, epochs=15, lr=0.001)
 
 model.load_state_dict(torch.load('best_model.pth'))
 test_loss, test_acc = evaluate(model, test_loader)
