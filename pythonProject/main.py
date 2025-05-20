@@ -8,6 +8,8 @@ from torchvision import transforms
 from PIL import Image
 import torch.nn as nn
 from torchvision.models import resnet18
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+import seaborn as sns
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -105,7 +107,7 @@ train_transforms = transforms.Compose([
     transforms.Resize((224, 224)),
     # transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(10),
-    transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
+    transforms.ColorJitter(brightness=0.5, contrast=0.6, saturation=0.1, hue=0.05),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
@@ -199,10 +201,14 @@ def evaluate(model, val_loader):
             acc_total += acc.item()
     return loss_total / len(val_loader), acc_total / len(val_loader)
 
-def train_model(model, train_loader, val_loader, epochs=15, lr=0.001):
+def train_model(model, train_loader, val_loader, epochs=12, lr=0.001):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     best_acc = 0.0
+    train_losses = []
+    train_accs = []
+    val_losses = []
+    val_accs = []
 
     for epoch in range(epochs):
         model.train()
@@ -220,7 +226,10 @@ def train_model(model, train_loader, val_loader, epochs=15, lr=0.001):
             train_acc += acc.item()
 
         val_loss, val_acc = evaluate(model, val_loader)
-
+        train_losses.append(train_loss/len(train_loader))
+        train_accs.append(train_acc/len(train_loader))
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
         print(f"Epoch [{epoch+1}/{epochs}]")
         print(f"Train loss: {train_loss / len(train_loader):.4f}, acc: {train_acc / len(train_loader):.4f}")
         print(f"Val   loss: {val_loss:.4f}, acc: {val_acc:.4f}")
@@ -230,9 +239,87 @@ def train_model(model, train_loader, val_loader, epochs=15, lr=0.001):
             best_acc = val_acc
             torch.save(model.state_dict(), 'best_model.pth')
             print("💾 Zapisano najlepszy model!")
+    plotLoss(train_losses, train_accs, val_losses, val_accs)
 
-train_model(model, train_loader, valid_loader, epochs=15, lr=0.001)
+
+def plotLoss(train_losses, train_accs,val_losses, val_accs):
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(train_accs, label='Train Accuracy')
+    plt.xlabel('Epoch')
+    plt.title('Train Loss vs Accuracy')
+    plt.legend()
+    # Validation Loss vs Validation Accuracy
+    plt.subplot(1, 2, 2)
+    plt.plot(val_losses, label='Validation Loss')
+    plt.plot(val_accs, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.title('Validation Loss vs Accuracy')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def evaluate_metrics(model, data_loader, class_names=None,output_csv='classification_report.csv'):
+        model.eval()
+        all_preds = []
+        all_labels = []
+
+        with torch.no_grad():
+            for images, labels in data_loader:
+                outputs = model(images)
+                _, preds = torch.max(outputs, 1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+
+        print("\n📈 Classification Report:")
+        report = classification_report(all_labels, all_preds, target_names=class_names, output_dict=True)
+
+        report_df = pd.DataFrame(report).transpose()
+        print(report_df) # Wyświetl tabelę z raportem klasyfikacji
+
+        report_df.to_csv(output_csv)
+        print(f"📂 Classification report saved to {output_csv}")
+
+        cm = confusion_matrix(all_labels, all_preds)
+
+        # Macierz pomyłek z seaborn
+        plt.figure(figsize=(20, 18))  # Większy wykres
+        sns.heatmap(cm, annot=False, fmt="d", cmap="Blues", xticklabels=class_names,
+                    yticklabels=class_names, cbar=True, square=True)
+
+        plt.title("🧮 Confusion Matrix", fontsize=18)
+        plt.xlabel("Predicted Label", fontsize=14)
+        plt.ylabel("True Label", fontsize=14)
+        plt.xticks(rotation=90, fontsize=10)
+        plt.yticks(rotation=0, fontsize=10)
+        plt.tight_layout()
+        plt.show()
+
+def print_top_confusions(cm, class_names, top_n=10):
+    cm_copy = cm.copy()
+    np.fill_diagonal(cm_copy, 0)  # Wyzeruj poprawne klasyfikacje
+
+    # Pobierz top N największych pomyłek
+    top_indices = np.unravel_index(np.argsort(cm_copy.ravel())[-top_n:], cm.shape)
+
+    print(f"\n🔍 Top {top_n} Confusions:")
+    for i in range(top_n-1, -1, -1):
+        true_label = class_names[top_indices[0][i]]
+        pred_label = class_names[top_indices[1][i]]
+        count = cm[top_indices[0][i], top_indices[1][i]]
+        print(f"Actual: '{true_label}' → Predicted: '{pred_label}' ({count} times)")
+
+train_model(model,train_loader,valid_loader,15,lr=0.001)
 
 model.load_state_dict(torch.load('best_model.pth'))
 test_loss, test_acc = evaluate(model, test_loader)
 print(f"🧪 Test Accuracy: {test_acc:.4f}, Loss: {test_loss:.4f}")
+
+if 'labels' in df.columns:
+    class_names = [str(cls) for cls in sorted(df['labels'].unique())]
+else:
+    class_names = [str(cls) for cls in sorted(df['class'].unique())]
+
+evaluate_metrics(model, test_loader, class_names)
